@@ -214,20 +214,57 @@ namespace NUnit.Framework.Internal
                     Console.WriteLine("Trying to call {0} without an instance", method.Name);
 				try
 				{
-					return method.Invoke( fixture, args );
+					if (LocationProperty != null)
+						Environment.CurrentDirectory = System.IO.Path.GetDirectoryName ((string)LocationProperty.GetValue (method.DeclaringType.Assembly, null));
+
+					object result = null;
+					if (GuiUnit.TestRunner.MainLoop == null) {
+						result = method.Invoke (fixture, args);
+					} else {
+						var invokeHelper = new GuiUnit.InvokerHelper {
+							Context = TestExecutionContext.CurrentContext,
+							Func = () => method.Invoke( fixture, args )
+						};
+
+						GuiUnit.TestRunner.MainLoop.InvokeOnMainLoop (invokeHelper);
+						invokeHelper.Waiter.WaitOne ();
+						if (invokeHelper.ex != null)
+							Rethrow (invokeHelper.ex);
+						result = invokeHelper.Result;
+					}
+
+					if (result is System.Threading.Tasks.Task)
+						((System.Threading.Tasks.Task) result).Wait ();
+					return result;
 				}
 				catch(Exception e)
 				{
-                    if (e is TargetInvocationException)
-                        throw new NUnitException("Rethrown", e.InnerException);
-                    else
-                        throw new NUnitException("Rethrown", e);
+					Rethrow (e);
                 }
 			}
 
 		    return null;
 		}
 
+		private static readonly PropertyInfo LocationProperty;
+
+		static Reflect()
+		{
+			Type assemblyType = typeof (Assembly);
+			LocationProperty = assemblyType.GetProperty ("Location");
+		}
+
+		static void Rethrow (Exception e)
+		{
+			string Rethrown = "Rethrown";
+			if (e is NUnitException && e.Message == Rethrown)
+				throw e;
+
+			if (e is TargetInvocationException || e is AggregateException)
+				throw new NUnitException(Rethrown, e.InnerException);
+			else
+				throw new NUnitException(Rethrown, e);
+		}
 		#endregion
 
         #region Private Constructor for static-only class
